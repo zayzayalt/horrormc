@@ -1,0 +1,20 @@
+{
+  "name": "horrormc-discord-bot",
+  "version": "0.1.0",
+  "description": "Discord moderation + applications + tickets + fun bot scaffold",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "stop": "pkill -f 'node src/index.js' || true",
+    "dev": "nodemon src/index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "better-sqlite3": "^8.3.0",
+    "discord.js": "^14.11.0",
+    "dotenv": "^16.3.1",
+    "ms": "^2.1.3"
+  }
+}
