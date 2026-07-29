@@ -23,7 +23,7 @@ client.commands = new Collection();
 
 const logChannelId = process.env.MOD_LOG_CHANNEL_ID;
 const consoleBuffer = [];
-const maxBufferSize = 50;
+const maxBufferSize = 20;
 
 function pushConsoleLog(entry) {
   consoleBuffer.push(entry);
@@ -33,12 +33,10 @@ function pushConsoleLog(entry) {
 client.log = async (content) => {
   if (typeof content === 'string') {
     console.log(content);
-    pushConsoleLog(content);
   } else if (content && typeof content === 'object') {
     const title = content.title || 'Bot Log';
     const description = content.description || '';
     console.log(`[${title}] ${description}`);
-    pushConsoleLog(`[${title}] ${description}`);
   }
   if (!logChannelId) return;
   try {
@@ -85,40 +83,24 @@ const originalConsoleWarn = console.warn;
 
 console.log = (...args) => {
   const message = args.join(' ');
-  pushConsoleLog(message);
   originalConsoleLog.apply(console, args);
 };
 
 console.error = (...args) => {
   const message = args.join(' ');
-  pushConsoleLog(`[ERROR] ${message}`);
   originalConsoleError.apply(console, args);
+  if (logChannelId) {
+    client.logEvent('Bot error', message, 0xff5555).catch(() => {});
+  }
 };
 
 console.warn = (...args) => {
   const message = args.join(' ');
-  pushConsoleLog(`[WARN] ${message}`);
   originalConsoleWarn.apply(console, args);
-};
-
-const flushConsoleBuffer = async () => {
-  if (!logChannelId) return;
-  const entries = [...consoleBuffer];
-  if (!entries.length) return;
-  try {
-    let channel = client.channels.cache.get(logChannelId);
-    if (!channel) channel = await client.channels.fetch(logChannelId).catch(() => null);
-    if (!channel || !channel.isTextBased()) return;
-    const payload = entries.slice(-10).join('\n');
-    await channel.send({ embeds: [new EmbedBuilder().setTitle('Bot console output').setDescription(`\`\`\`\n${payload}\n\`\`\``).setColor(0x95a5a6).setTimestamp()] }).catch(() => {});
-  } catch (err) {
-    console.error('Failed to flush console buffer', err);
+  if (logChannelId) {
+    client.logEvent('Bot warning', message, 0xffaa00).catch(() => {});
   }
 };
-
-setInterval(() => {
-  flushConsoleBuffer().catch(() => {});
-}, 10000);
 
 // load commands
 const commandsPath = path.join(__dirname, 'commands');
