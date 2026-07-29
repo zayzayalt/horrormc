@@ -1,5 +1,21 @@
 const db = require('./db');
 
+let aiLogger = null;
+
+function setLogger(logger) {
+  aiLogger = logger;
+}
+
+async function emitAIEvent(title, description, color = 0x9b59b6) {
+  if (typeof aiLogger === 'function') {
+    try {
+      await aiLogger(title, description, color);
+    } catch (err) {
+      console.error('Failed to emit AI log', err);
+    }
+  }
+}
+
 function shouldUseInternet(raw) {
   return /\b(search|look up|what is|who is|how to|where is|definition|meaning|latest|news|weather|score|wiki|article|broken|fix|best way)\b/i.test(raw) || /\?/.test(raw);
 }
@@ -32,6 +48,7 @@ async function internetLookup(query) {
     return summary ? { summary, source } : null;
   } catch (e) {
     console.error('Internet lookup failed', e);
+    emitAIEvent('AI backend failure', `Internet lookup failed: ${e.message || e}`, 0xff5555).catch(() => {});
     return null;
   }
 }
@@ -279,6 +296,7 @@ Provide the exact error and I will give you a concrete resolution.`);
 
 async function queryAIWithHistory({ guildId = null, channelId = null, userId = null, username = '', content = '', personality = '', historyLimit = 8 }) {
   try {
+    await emitAIEvent('AI update', `Processing AI request for ${username || 'unknown user'} in channel ${channelId || 'unknown'}`, 0x3498db);
     const rows = db.prepare(`SELECT role, content FROM ai_conversations WHERE guild_id = ? AND channel_id = ? ORDER BY created_at DESC LIMIT ?`).all(guildId, channelId, historyLimit) || [];
     const messages = [];
     if (personality) messages.push({ role: 'system', content: personality });
@@ -299,6 +317,7 @@ async function queryAIWithHistory({ guildId = null, channelId = null, userId = n
 
     const platformResponse = getPlatformResponse(content);
     if (platformResponse) {
+      await emitAIEvent('AI update', `Returned platform response for ${username || 'unknown user'}`, 0x2ecc71);
       return platformResponse;
     }
 
@@ -329,6 +348,7 @@ If you'd like, I can explain more about that or help you dig deeper.`;
     }
     if (!reply) {
       reply = localGenerate(messages, personality);
+      await emitAIEvent('AI update', `Used local generation fallback for ${username || 'unknown user'}`, 0xf39c12);
     }
 
     const normalized = reply || '';
@@ -341,16 +361,21 @@ If you'd like, I can explain more about that or help you dig deeper.`;
         if (normalized) db.prepare('INSERT INTO ai_conversations (guild_id, channel_id, user_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)')
           .run(guildId, channelId, userId, 'assistant', normalized, now + 1);
       }
-    } catch (e) { console.error('Failed to persist AI conversation', e); }
+    } catch (e) {
+      console.error('Failed to persist AI conversation', e);
+      await emitAIEvent('AI backend failure', `Failed to persist AI conversation: ${e.message || e}`, 0xff5555);
+    }
     return normalized;
   } catch (e) {
     console.error('AI query failed', e);
+    await emitAIEvent('AI backend failure', `AI query failed: ${e.message || e}`, 0xff5555);
     return 'AI error.';
   }
 }
 
 async function clearHistory(guildId, channelId) {
   db.prepare('DELETE FROM ai_conversations WHERE guild_id = ? AND channel_id = ?').run(guildId, channelId);
+  await emitAIEvent('AI update', `Cleared AI history for guild ${guildId} and channel ${channelId}`, 0x95a5a6);
 }
 
-module.exports = { queryAIWithHistory, clearHistory, buildFactPool };
+module.exports = { queryAIWithHistory, clearHistory, buildFactPool, setLogger };

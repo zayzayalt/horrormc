@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { Client, GatewayIntentBits, Partials, Collection } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, Collection, EmbedBuilder } = require('discord.js');
 require('dotenv').config();
 
 const DEFAULT_PREFIX = process.env.PREFIX || '.';
@@ -22,19 +22,103 @@ const client = new Client({
 client.commands = new Collection();
 
 const logChannelId = process.env.MOD_LOG_CHANNEL_ID;
-client.log = async (message) => {
-  console.log(message);
+const consoleBuffer = [];
+const maxBufferSize = 50;
+
+function pushConsoleLog(entry) {
+  consoleBuffer.push(entry);
+  if (consoleBuffer.length > maxBufferSize) consoleBuffer.shift();
+}
+
+client.log = async (content) => {
+  if (typeof content === 'string') {
+    console.log(content);
+    pushConsoleLog(content);
+  } else if (content && typeof content === 'object') {
+    const title = content.title || 'Bot Log';
+    const description = content.description || '';
+    console.log(`[${title}] ${description}`);
+    pushConsoleLog(`[${title}] ${description}`);
+  }
   if (!logChannelId) return;
   try {
     let channel = client.channels.cache.get(logChannelId);
     if (!channel) channel = await client.channels.fetch(logChannelId).catch(() => null);
-    if (channel && channel.isTextBased()) {
-      await channel.send(message).catch(() => {});
+    if (!channel || !channel.isTextBased()) return;
+
+    if (typeof content === 'string') {
+      await channel.send(content).catch(() => {});
+      return;
     }
+
+    const embed = content.embed || new EmbedBuilder()
+      .setTitle(content.title || 'Bot Log')
+      .setDescription(content.description || '')
+      .setColor(content.color ?? 0x5865f2)
+      .setTimestamp();
+
+    await channel.send({ embeds: [embed] }).catch(() => {});
   } catch (err) {
     console.error('Failed to log to configured channel', err);
   }
 };
+
+client.logEvent = async (title, description, color = 0x5865f2) => {
+  await client.log({ title, description, color });
+};
+
+aiUtil.setLogger(async (title, description, color = 0x9b59b6) => {
+  await client.logEvent(title, description, color);
+});
+
+client.logAIEvent = async (title, description, color = 0x9b59b6) => {
+  await client.logEvent(title, description, color);
+};
+
+client.logFailure = async (title, description, color = 0xff5555) => {
+  await client.logEvent(title, description, color);
+};
+
+const originalConsoleLog = console.log;
+const originalConsoleError = console.error;
+const originalConsoleWarn = console.warn;
+
+console.log = (...args) => {
+  const message = args.join(' ');
+  pushConsoleLog(message);
+  originalConsoleLog.apply(console, args);
+};
+
+console.error = (...args) => {
+  const message = args.join(' ');
+  pushConsoleLog(`[ERROR] ${message}`);
+  originalConsoleError.apply(console, args);
+};
+
+console.warn = (...args) => {
+  const message = args.join(' ');
+  pushConsoleLog(`[WARN] ${message}`);
+  originalConsoleWarn.apply(console, args);
+};
+
+const flushConsoleBuffer = async () => {
+  if (!logChannelId) return;
+  const entries = [...consoleBuffer];
+  if (!entries.length) return;
+  try {
+    let channel = client.channels.cache.get(logChannelId);
+    if (!channel) channel = await client.channels.fetch(logChannelId).catch(() => null);
+    if (!channel || !channel.isTextBased()) return;
+    const payload = entries.slice(-10).join('\n');
+    await channel.send({ embeds: [new EmbedBuilder().setTitle('Bot console output').setDescription(`\`\`\`\n${payload}\n\`\`\``).setColor(0x95a5a6).setTimestamp()] }).catch(() => {});
+  } catch (err) {
+    console.error('Failed to flush console buffer', err);
+  }
+};
+
+setInterval(() => {
+  flushConsoleBuffer().catch(() => {});
+}, 10000);
 
 // load commands
 const commandsPath = path.join(__dirname, 'commands');
@@ -75,8 +159,10 @@ client.on('messageCreate', async (message) => {
   if (!cmd) return;
   try {
     await cmd.execute(client, message, args);
+    await client.logAIEvent('Command used', `${message.author.tag} used .${cmdName}`, 0x3498db);
   } catch (err) {
     console.error('Command error', err);
+    await client.logFailure('Command failure', `Command .${cmdName} failed for ${message.author.tag}: ${err.message || err}`, 0xff5555);
     message.channel.send('There was an error executing that command.');
   }
 });
@@ -95,18 +181,44 @@ client.on('messageCreate', async (message) => {
     // send to AI and reply (short + long), show typing
     const personality = settings.ai_personality || 'You are a helpful assistant.';
     try {
+      await client.logAIEvent('AI request', `${message.author.tag} triggered AI in #${message.channel.name || message.channel.id}`, 0x9b59b6);
       await message.channel.sendTyping();
       await new Promise(resolve => setTimeout(resolve, 2200));
       const combined = await aiUtil.queryAIWithHistory({ guildId: message.guild.id, channelId: message.channel.id, userId: message.author.id, username: message.author.username, content: message.content, personality });
-      if (!combined) return;
+      if (!combined) {
+        await client.logFailure('AI no response', `AI returned no response for ${message.author.tag} in ${message.channel.id}`, 0xffaa00);
+        return;
+      }
       await message.reply({ content: combined, allowedMentions: { repliedUser: false, parse: [] } });
-    } catch (e) { console.error('AI handler error', e); }
-  } catch (e) { console.error('AI handler error', e); }
+      await client.logAIEvent('AI response', `AI answered ${message.author.tag} successfully`, 0x2ecc71);
+    } catch (e) {
+      console.error('AI handler error', e);
+      await client.logFailure('AI failure', `AI handler failed for ${message.author.tag}: ${e.message || e}`, 0xff5555);
+    }
+  } catch (e) {
+    console.error('AI handler error', e);
+    await client.logFailure('AI backend failure', `AI backend setup failed: ${e.message || e}`, 0xff5555);
+  }
 });
 
-client.once('ready', () => {
-  console.log(`Logged in as ${client.user.tag}`);
+client.once('ready', async () => {
+  const message = `Logged in as ${client.user.tag}`;
+  console.log(message);
+  await client.logEvent('Bot started', message, 0x2ecc71);
 });
+
+const handleShutdown = async (signal) => {
+  try {
+    await client.logEvent('Bot stopping', `Received ${signal}. Shutting down.`, 0xff5555);
+  } catch (err) {
+    console.error('Failed to log shutdown', err);
+  }
+  process.exit(0);
+};
+
+process.on('SIGINT', () => { handleShutdown('SIGINT'); });
+process.on('SIGTERM', () => { handleShutdown('SIGTERM'); });
+process.on('SIGUSR2', () => { handleShutdown('SIGUSR2'); });
 
 const token = process.env.DISCORD_TOKEN;
 if (!token) {
