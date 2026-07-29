@@ -21,6 +21,21 @@ const client = new Client({
 
 client.commands = new Collection();
 
+const logChannelId = process.env.MOD_LOG_CHANNEL_ID;
+client.log = async (message) => {
+  console.log(message);
+  if (!logChannelId) return;
+  try {
+    let channel = client.channels.cache.get(logChannelId);
+    if (!channel) channel = await client.channels.fetch(logChannelId).catch(() => null);
+    if (channel && channel.isTextBased()) {
+      await channel.send(message).catch(() => {});
+    }
+  } catch (err) {
+    console.error('Failed to log to configured channel', err);
+  }
+};
+
 // load commands
 const commandsPath = path.join(__dirname, 'commands');
 function loadCommands(dir) {
