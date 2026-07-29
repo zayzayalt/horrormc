@@ -200,6 +200,36 @@ function getPlatformResponse(raw) {
   return null;
 }
 
+function getSayRequest(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return null;
+  const lc = text.toLowerCase();
+  const patterns = [
+    /^say\s+(.+)$/i,
+    /^tell\s+(?:me\s+)?(?:them|him|her|someone)\s+(.+)$/i,
+    /^tell\s+(.+)$/i,
+    /^repeat\s+(.+)$/i,
+    /^respond\s+with\s+(.+)$/i,
+    /^reply\s+with\s+(.+)$/i,
+    /^make\s+the\s+bot\s+say\s+(.+)$/i,
+    /^make\s+me\s+say\s+(.+)$/i
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match && match[1]) {
+      return match[1].trim();
+    }
+  }
+
+  if (/\b(?:say|tell|repeat|reply|respond)\b/i.test(lc) && /\b(?:this|that|it|them|him|her|someone)\b/i.test(lc)) {
+    const withoutPrefix = text.replace(/^(?:say|tell|repeat|reply|respond)\s+/i, '').trim();
+    return withoutPrefix || null;
+  }
+
+  return null;
+}
+
 function localGenerate(messages, personality = '') {
   const last = messages[messages.length - 1] || { content: '' };
   const raw = String(last.content || '').trim();
@@ -243,6 +273,9 @@ function localGenerate(messages, personality = '') {
 
   const platformResponse = getPlatformResponse(raw);
   if (platformResponse) return platformResponse;
+
+  const sayRequest = getSayRequest(raw);
+  if (sayRequest) return sayRequest;
 
   if (/\b(api key|api-token|token|key|secret|secret key|credential)\b/i.test(lc)) {
     return `I cannot give you that, as it would ruin the server I am hosted on.`;
@@ -319,6 +352,12 @@ async function queryAIWithHistory({ guildId = null, channelId = null, userId = n
     if (platformResponse) {
       await emitAIEvent('AI update', `Returned platform response for ${username || 'unknown user'}`, 0x2ecc71);
       return platformResponse;
+    }
+
+    const sayRequest = getSayRequest(content);
+    if (sayRequest) {
+      await emitAIEvent('AI update', `Responding with requested phrase for ${username || 'unknown user'}`, 0x2ecc71);
+      return sayRequest;
     }
 
     let reply;
