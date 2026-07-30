@@ -363,7 +363,7 @@ process.on('SIGUSR2', () => { handleShutdown('SIGUSR2'); });
 
 const token = process.env.DISCORD_TOKEN;
 if (!token) {
-  console.error('Missing DISCORD_TOKEN in env');
-  process.exit(1);
+  console.warn('Missing DISCORD_TOKEN in env; serving the web console without Discord login.');
+} else {
+  client.login(token);
 }
-client.login(token);
