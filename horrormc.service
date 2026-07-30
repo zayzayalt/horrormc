@@ -1,0 +1,17 @@
+[Unit]
+Description=HorrorMC Discord Bot
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/workspaces/horrormc
+Environment=HOST=0.0.0.0
+Environment=PORT=3000
+ExecStart=/usr/bin/env bash /workspaces/horrormc/scripts/start-bot.sh
+Restart=always
+RestartSec=5
+StandardOutput=append:/workspaces/horrormc/logs/horrormc.log
+StandardError=append:/workspaces/horrormc/logs/horrormc.error.log
+
+[Install]
+WantedBy=multi-user.target

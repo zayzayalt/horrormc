@@ -1,11 +1,16 @@
 const fs = require('fs');
 const path = require('path');
+const readline = require('readline');
 const { Client, GatewayIntentBits, Partials, Collection, EmbedBuilder } = require('discord.js');
 require('dotenv').config();
 
 const DEFAULT_PREFIX = process.env.PREFIX || '.';
 const db = require('./utils/db');
 const aiUtil = require('./utils/ai');
+const { createHealthServer, getBindConfig, appendLogLine } = require('./utils/server');
+
+const { host, port } = getBindConfig();
+createHealthServer({ host, port });
 
 const client = new Client({
   intents: [
@@ -24,10 +29,159 @@ client.commands = new Collection();
 const logChannelId = process.env.MOD_LOG_CHANNEL_ID;
 const consoleBuffer = [];
 const maxBufferSize = 20;
+const maxAuditLogSize = 5 * 1024 * 1024; // 5 MB
+const auditDirectory = path.join(__dirname, '..', 'data');
+const auditLogPath = path.join(auditDirectory, 'message_audit.log');
+if (!fs.existsSync(auditDirectory)) {
+  fs.mkdirSync(auditDirectory, { recursive: true });
+}
+
+function formatCSTTimestamp(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Chicago',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+    timeZoneName: 'short'
+  }).formatToParts(date);
+
+  const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${map.year}-${map.month}-${map.day} ${map.hour}:${map.minute}:${map.second} ${map.timeZoneName}`;
+}
+
+function rotateAuditLogIfNeeded() {
+  try {
+    if (!fs.existsSync(auditLogPath)) return;
+    const stats = fs.statSync(auditLogPath);
+    if (stats.size < maxAuditLogSize) return;
+    const backupPath = path.join(auditDirectory, `message_audit_${Date.now()}.log`);
+    fs.renameSync(auditLogPath, backupPath);
+  } catch (err) {
+    console.error('Failed to rotate audit log', err);
+  }
+}
+
+function appendAuditLog(entry) {
+  try {
+    rotateAuditLogIfNeeded();
+    fs.appendFileSync(auditLogPath, `${entry}\n`, 'utf8');
+  } catch (err) {
+    console.error('Failed to write audit log', err);
+  }
+}
+
+function logUserMessage(message) {
+  if (!message || message.author.bot) return;
+  const channelLabel = message.guild ? `${message.guild.name}/${message.channel.name || message.channel.id}` : `DM ${message.author.tag}`;
+  const content = String(message.content || '').trim();
+  const timestamp = formatCSTTimestamp();
+  const entry = `[${timestamp}] [MESSAGE] ${message.id || 'no-id'} ${message.author.tag} in ${channelLabel}: ${content}`;
+  console.log(entry);
+  appendAuditLog(entry);
+}
+
+let terminalAIChannel = null;
+let terminalTypingTicker = null;
+let terminalTypingActive = false;
 
 function pushConsoleLog(entry) {
   consoleBuffer.push(entry);
   if (consoleBuffer.length > maxBufferSize) consoleBuffer.shift();
+}
+
+async function resolveTerminalAIChannel() {
+  try {
+    const guildId = process.env.TERMINAL_AI_GUILD_ID;
+    const channelId = process.env.TERMINAL_AI_CHANNEL_ID;
+    if (guildId && channelId) {
+      const guild = await client.guilds.fetch(guildId).catch(() => null);
+      if (guild) {
+        const channel = await guild.channels.fetch(channelId).catch(() => null);
+        if (channel && channel.isTextBased()) return channel;
+      }
+    }
+    const row = db.prepare('SELECT ai_channel_id FROM guild_settings WHERE ai_enabled = 1 AND ai_channel_id IS NOT NULL LIMIT 1').get();
+    if (!row || !row.ai_channel_id) return null;
+    const channel = await client.channels.fetch(row.ai_channel_id).catch(() => null);
+    return channel && channel.isTextBased() ? channel : null;
+  } catch (err) {
+    console.error('Failed to resolve terminal AI channel', err);
+    return null;
+}
+}
+
+function terminalTypingStart(channel) {
+  if (!channel || terminalTypingActive) return;
+  terminalTypingActive = true;
+  channel.sendTyping().catch(() => {});
+  terminalTypingTicker = setInterval(() => {
+    if (channel && terminalTypingActive) channel.sendTyping().catch(() => {});
+  }, 4000);
+}
+
+function terminalTypingStop() {
+  terminalTypingActive = false;
+  if (terminalTypingTicker) {
+    clearInterval(terminalTypingTicker);
+    terminalTypingTicker = null;
+  }
+}
+
+function initializeTerminalAI() {
+  if (!process.stdin.isTTY) return;
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: 'AI> ' });
+  readline.emitKeypressEvents(process.stdin, rl);
+  if (process.stdin.isTTY) process.stdin.setRawMode(true);
+
+  rl.on('line', async (line) => {
+    const text = String(line || '').trim();
+    terminalTypingStop();
+    if (!text) {
+      rl.prompt();
+      return;
+    }
+
+    if (!terminalAIChannel) {
+      terminalAIChannel = await resolveTerminalAIChannel();
+      if (!terminalAIChannel) {
+        console.log('No configured AI channel found for terminal output. Set TERMINAL_AI_GUILD_ID and TERMINAL_AI_CHANNEL_ID, or enable AI in a guild.');
+        rl.prompt();
+        return;
+      }
+    }
+
+    try {
+      const timestamp = formatCSTTimestamp();
+      console.log(`[${timestamp}] [TERMINAL AI] Sending to ${terminalAIChannel.id}: ${text}`);
+      await terminalAIChannel.sendTyping();
+      await terminalAIChannel.send(text);
+    } catch (err) {
+      console.error('Terminal AI send failed', err);
+    }
+    rl.prompt();
+  });
+
+  rl.on('close', () => {
+    terminalTypingStop();
+    if (process.stdin.isTTY) process.stdin.setRawMode(false);
+    console.log('Terminal AI input closed.');
+    process.exit(0);
+  });
+
+  process.stdin.on('keypress', (char, key) => {
+    if (!terminalAIChannel) return;
+    if (key && key.name === 'c' && key.ctrl) {
+      rl.close();
+      return;
+    }
+    terminalTypingStart(terminalAIChannel);
+  });
+
+  rl.prompt();
 }
 
 client.log = async (content) => {
@@ -83,11 +237,13 @@ const originalConsoleWarn = console.warn;
 
 console.log = (...args) => {
   const message = args.join(' ');
+  appendLogLine(message);
   originalConsoleLog.apply(console, args);
 };
 
 console.error = (...args) => {
   const message = args.join(' ');
+  appendLogLine(message);
   originalConsoleError.apply(console, args);
   if (logChannelId) {
     client.logEvent('Bot error', message, 0xff5555).catch(() => {});
@@ -96,6 +252,7 @@ console.error = (...args) => {
 
 console.warn = (...args) => {
   const message = args.join(' ');
+  appendLogLine(message);
   originalConsoleWarn.apply(console, args);
   if (logChannelId) {
     client.logEvent('Bot warning', message, 0xffaa00).catch(() => {});
@@ -129,6 +286,7 @@ if (fs.existsSync(eventsPath)) {
 }
 
 client.on('messageCreate', async (message) => {
+  logUserMessage(message);
   if (message.author.bot) return;
   if (!message.guild) return; // ignore DMs for prefix commands
   // fetch guild prefix (fallback to default)
@@ -171,7 +329,7 @@ client.on('messageCreate', async (message) => {
         await client.logFailure('AI no response', `AI returned no response for ${message.author.tag} in ${message.channel.id}`, 0xffaa00);
         return;
       }
-      await message.reply({ content: combined, allowedMentions: { repliedUser: false, parse: [] } });
+      await message.reply({ content: combined, allowedMentions: { repliedUser: false, parse: [] }, failIfNotExists: false });
       await client.logAIEvent('AI response', `AI answered ${message.author.tag} successfully`, 0x2ecc71);
     } catch (e) {
       console.error('AI handler error', e);
@@ -183,10 +341,11 @@ client.on('messageCreate', async (message) => {
   }
 });
 
-client.once('ready', async () => {
+client.once('clientReady', async () => {
   const message = `Logged in as ${client.user.tag}`;
   console.log(message);
   await client.logEvent('Bot started', message, 0x2ecc71);
+  initializeTerminalAI();
 });
 
 const handleShutdown = async (signal) => {

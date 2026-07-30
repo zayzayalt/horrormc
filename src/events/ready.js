@@ -1,5 +1,5 @@
 module.exports = {
-  name: 'ready',
+  name: 'clientReady',
   async execute(client) {
     const message = `Bot ready: ${client.user.tag}`;
     console.log(message);

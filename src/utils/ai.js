@@ -57,6 +57,54 @@ function isLookupRequest(raw) {
   return /\b(look up|lookup|search for|search|find out|google|find information on)\b/i.test(raw);
 }
 
+function isDeveloperHelpRequest(raw) {
+  if (!raw || typeof raw !== 'string') return false;
+  const codeTerms = /\b(code|program(ming)?|script|function|method|class|syntax|compile|runtime|stack trace|stacktrace|exception|debug|javascript|js|typescript|ts|python|java|c#|c\+\+|go|php|ruby|node|node\.js|react|vue|express|discord\.js|api|library|framework)\b/i;
+  const helpTerms = /\b(help|assist|assist me|how do i|how to|how can i|fix|troubleshoot|debug|write|create|generate|build|implement|example|sample|solution|problem|issue|error|bug)\b/i;
+  return codeTerms.test(raw) && helpTerms.test(raw);
+}
+
+function detectProgrammingLanguage(raw) {
+  if (!raw || typeof raw !== 'string') return 'javascript';
+  const lc = raw.toLowerCase();
+  if (/\btypescript\b|\btsx\b/.test(lc)) return 'typescript';
+  if (/\bnode(?:\.js)?\b|\bexpress\b|\breact\b|\bvue\b|\bjavascript\b|\bjs\b/.test(lc)) return 'javascript';
+  if (/\bpython\b/.test(lc)) return 'python';
+  if (/\bjava\b/.test(lc)) return 'java';
+  if (/\bphp\b/.test(lc)) return 'php';
+  if (/\bruby\b/.test(lc)) return 'ruby';
+  if (/\bgo\b|\bgolang\b/.test(lc)) return 'go';
+  if (/\b(?:c\+\+|cpp)\b/.test(lc)) return 'cpp';
+  if (/\bc#\b/.test(lc)) return 'csharp';
+  return 'javascript';
+}
+
+function generateCodeSnippet(language, task) {
+  const cleanedTask = task ? task.replace(/\?+$/, '').trim() : 'a short code example';
+  switch (language) {
+    case 'typescript':
+      return `// ${cleanedTask}\nfunction example(): void {\n  console.log('This is a simple TypeScript example.');\n}\n\nexample();`;
+    case 'javascript':
+      return `// ${cleanedTask}\nfunction example() {\n  console.log('This is a simple JavaScript example.');\n}\n\nexample();`;
+    case 'python':
+      return `# ${cleanedTask}\ndef example():\n    print('This is a simple Python example.')\n\nexample()`;
+    case 'java':
+      return `// ${cleanedTask}\npublic class Example {\n    public static void main(String[] args) {\n        System.out.println("This is a simple Java example.");\n    }\n}`;
+    case 'php':
+      return `<?php\n// ${cleanedTask}\necho 'This is a simple PHP example.';`;
+    case 'ruby':
+      return `# ${cleanedTask}\ndef example\n  puts 'This is a simple Ruby example.'\nend\n\nexample`;
+    case 'go':
+      return `// ${cleanedTask}\npackage main\n\nimport \"fmt\"\n\nfunc main() {\n    fmt.Println(\"This is a simple Go example.\")\n}`;
+    case 'cpp':
+      return `// ${cleanedTask}\n#include <iostream>\n\nint main() {\n    std::cout << \"This is a simple C++ example.\" << std::endl;\n    return 0;\n}`;
+    case 'csharp':
+      return `// ${cleanedTask}\nusing System;\n\nclass Program {\n    static void Main() {\n        Console.WriteLine(\"This is a simple C# example.\");\n    }\n}`;
+    default:
+      return `// ${cleanedTask}\nfunction example() {\n  console.log('This is a simple example.');\n}\n\nexample();`;
+  }
+}
+
 function choose(arr) {
   return arr[Math.floor(Math.random() * arr.length)];
 }
@@ -200,6 +248,92 @@ function getPlatformResponse(raw) {
   return null;
 }
 
+function normalizeSlurText(text) {
+  return String(text || '').toLowerCase()
+    .replace(/@/g, 'a')
+    .replace(/4/g, 'a')
+    .replace(/[13!|]/g, 'i')
+    .replace(/3/g, 'e')
+    .replace(/0/g, 'o')
+    .replace(/[^a-z]/g, '');
+}
+
+function getDisallowedPhrase(text) {
+  const raw = String(text || '').toLowerCase();
+  const normalized = normalizeSlurText(raw);
+  const disallowedPatterns = [
+    { pattern: /\bn[\s\W_]*[i1!|l][\s\W_]*g[\s\W_]*g[\s\W_]*[e3][\s\W_]*r\b/, name: 'n-word' },
+    { pattern: /\bn[\s\W_]*[i1!|l][\s\W_]*g[\s\W_]*[a@4]\b/, name: 'nigga' },
+    { pattern: /\bn[\s\W_]*g[\s\W_]*[a@4]\b/, name: 'nga' },
+    { pattern: /\b(f|ph)[\s\W_]*u[\s\W_]*c[\s\W_]*k\b/, name: 'fuck' },
+    { pattern: /\bs[\s\W_]*h[\s\W_]*i[\s\W_]*t\b/, name: 'shit' },
+    { pattern: /\bb[\s\W_]*i[\s\W_]*t[\s\W_]*c[\s\W_]*h\b/, name: 'bitch' },
+    { pattern: /\ba[\s\W_]*s[\s\W_]*s[\s\W_]*h[\s\W_]*o[\s\W_]*l[\s\W_]*e\b/, name: 'asshole' },
+    { pattern: /\bc[\s\W_]*u[\s\W_]*n[\s\W_]*t\b/, name: 'cunt' },
+    { pattern: /\bd[\s\W_]*i[\s\W_]*c[\s\W_]*k\b/, name: 'dick' },
+    { pattern: /\bp[\s\W_]*u[\s\W_]*s[\s\W_]*s[\s\W_]*y\b/, name: 'pussy' }
+  ];
+
+  for (const entry of disallowedPatterns) {
+    if (entry.pattern.test(raw) || entry.pattern.test(normalized)) {
+      return entry.name;
+    }
+  }
+
+  if (normalized.includes('nigger')) return 'n-word';
+  if (normalized.includes('nigga')) return 'nigga';
+  if (normalized.includes('ngga')) return 'nga';
+  if (normalized.includes('nga')) return 'nga';
+  if (normalized.includes('fuck')) return 'fuck';
+  if (normalized.includes('shit')) return 'shit';
+  if (normalized.includes('bitch')) return 'bitch';
+  if (normalized.includes('asshole')) return 'asshole';
+  if (normalized.includes('cunt')) return 'cunt';
+  if (normalized.includes('dick')) return 'dick';
+  if (normalized.includes('pussy')) return 'pussy';
+
+  return null;
+}
+
+function disallowedResponse(type) {
+  if (!type) return 'get the flip out, im a good ai i dont cuss';
+  if (type === 'n-word' || type === 'nigga' || type === 'nga') {
+    return 'no u racist bum';
+  }
+  return 'get the flip out, im a good ai i dont cuss';
+}
+
+function formatCSTTimestamp(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Chicago',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+    timeZoneName: 'short'
+  }).formatToParts(date);
+
+  const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${map.year}-${map.month}-${map.day} ${map.hour}:${map.minute}:${map.second} ${map.timeZoneName}`;
+}
+
+function logDisallowedAttempt(username, phrase, raw) {
+  const timestamp = formatCSTTimestamp();
+  console.log(`\x1b[31m[${timestamp}] [DISALLOWED] ${username || 'unknown user'} attempted to make the bot say: ${phrase}. Original: ${String(raw || '').trim()}\x1b[0m`);
+}
+
+function sanitizeReply(reply, username) {
+  const detected = getDisallowedPhrase(reply);
+  if (detected) {
+    logDisallowedAttempt(username, detected, reply);
+    return disallowedResponse(detected);
+  }
+  return reply;
+}
+
 function getSayRequest(raw) {
   const text = String(raw || '').trim();
   if (!text) return null;
@@ -218,13 +352,27 @@ function getSayRequest(raw) {
   for (const pattern of patterns) {
     const match = text.match(pattern);
     if (match && match[1]) {
-      return match[1].trim();
+      const requested = match[1].trim();
+      const attempted = getDisallowedPhrase(requested);
+      if (attempted) {
+        return disallowedResponse(attempted);
+      }
+      return requested;
     }
   }
 
   if (/\b(?:say|tell|repeat|reply|respond)\b/i.test(lc) && /\b(?:this|that|it|them|him|her|someone)\b/i.test(lc)) {
     const withoutPrefix = text.replace(/^(?:say|tell|repeat|reply|respond)\s+/i, '').trim();
+    const attempted = getDisallowedPhrase(withoutPrefix);
+    if (attempted) {
+      return disallowedResponse(attempted);
+    }
     return withoutPrefix || null;
+  }
+
+  const attemptedText = getDisallowedPhrase(text);
+  if (attemptedText) {
+    return disallowedResponse(attemptedText);
   }
 
   return null;
@@ -258,6 +406,13 @@ function localGenerate(messages, personality = '') {
     tsundereWrap("Hello. What can I help you with today?"),
     tsundereWrap("Hi there. Please let me know your question.")
   ]);
+  if (isDeveloperHelpRequest(raw)) {
+    const language = detectProgrammingLanguage(raw);
+    const task = raw.replace(/^(?:please\s+)?(?:help\s+me\s+with|help\s+with|help\s+|how\s+do\s+i\s+|how\s+can\s+i\s+|how\s+to\s+|write\s+|generate\s+|create\s+|build\s+|fix\s+|debug\s+|troubleshoot\s+|example\s+of\s+|sample\s+|solution\s+for\s+)/i, '').trim();
+    const codeSnippet = generateCodeSnippet(language, task);
+    return `${answerPrefix} Here is a code-focused solution for your request:\n\`\`\`${language}\n${codeSnippet}\n\`\`\`\nIf you want a more specific implementation, share the exact language, framework, or error details.`;
+  }
+
   if (lc.includes('help')) return tsundereWrap(`${answerPrefix} Describe the task you need assistance with, and I will provide a precise, professional solution.`);
   if (lc.includes('name')) return choose([
     tsundereWrap("I'm HorrorMC, your server assistant."),
@@ -354,6 +509,13 @@ async function queryAIWithHistory({ guildId = null, channelId = null, userId = n
       return platformResponse;
     }
 
+    const attempted = getDisallowedPhrase(content);
+    if (attempted) {
+      logDisallowedAttempt(username, attempted, content);
+      await emitAIEvent('AI disallowed attempt', `Blocked disallowed phrase ${attempted} from ${username || 'unknown user'}`, 0xff0000);
+      return disallowedResponse(attempted);
+    }
+
     const sayRequest = getSayRequest(content);
     if (sayRequest) {
       await emitAIEvent('AI update', `Responding with requested phrase for ${username || 'unknown user'}`, 0x2ecc71);
@@ -393,6 +555,9 @@ If you'd like, I can explain more about that or help you dig deeper.`;
     const normalized = reply || '';
 
     try {
+      if (username || content) {
+        await emitAIEvent('AI incoming message', `${username || 'unknown user'} said: ${content}`, 0x95a5a6);
+      }
       const now = Date.now();
       if (guildId && channelId && userId) {
         db.prepare('INSERT INTO ai_conversations (guild_id, channel_id, user_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)')
