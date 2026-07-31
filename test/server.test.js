@@ -1,8 +1,11 @@
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { once } = require('node:events');
 
-const { createHealthServer, getBindConfig } = require('../src/utils/server');
+const { createHealthServer, getBindConfig, ensureRuntimeDirectories, getPresenceConfig } = require('../src/utils/server');
 
 test('bind config uses the requested host and port from environment', () => {
   const config = getBindConfig({ HOST: '51.210.117.84', PORT: '3000' });
@@ -50,4 +53,34 @@ test('status endpoint reports bot state and indicator colors', async () => {
       server.close((err) => (err ? reject(err) : resolve()));
     });
   }
+});
+
+test('ensureRuntimeDirectories creates the logs folder when it is missing', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'horrormc-'));
+  const logsDir = path.join(tempDir, 'logs');
+
+  fs.rmSync(logsDir, { recursive: true, force: true });
+  assert.equal(fs.existsSync(logsDir), false);
+
+  ensureRuntimeDirectories(tempDir);
+
+  assert.equal(fs.existsSync(logsDir), true);
+  fs.rmSync(tempDir, { recursive: true, force: true });
+});
+
+test('presence config maps bot state to the requested Discord status', () => {
+  assert.deepEqual(getPresenceConfig('offline', { error: false }), {
+    status: 'idle',
+    activityName: 'Watching HorrorMC'
+  });
+
+  assert.deepEqual(getPresenceConfig('online', { error: true }), {
+    status: 'dnd',
+    activityName: 'Watching HorrorMC'
+  });
+
+  assert.deepEqual(getPresenceConfig('online', { error: false }), {
+    status: 'online',
+    activityName: 'Watching HorrorMC'
+  });
 });

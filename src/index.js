@@ -7,7 +7,7 @@ require('dotenv').config();
 const DEFAULT_PREFIX = process.env.PREFIX || '.';
 const db = require('./utils/db');
 const aiUtil = require('./utils/ai');
-const { createHealthServer, getBindConfig, appendLogLine } = require('./utils/server');
+const { createHealthServer, getBindConfig, appendLogLine, getPresenceConfig } = require('./utils/server');
 
 const { host, port } = getBindConfig();
 createHealthServer({ host, port });
@@ -87,6 +87,8 @@ function logUserMessage(message) {
 let terminalAIChannel = null;
 let terminalTypingTicker = null;
 let terminalTypingActive = false;
+let botState = 'offline';
+let botStartupError = false;
 
 function pushConsoleLog(entry) {
   consoleBuffer.push(entry);
@@ -184,6 +186,28 @@ function initializeTerminalAI() {
   rl.prompt();
 }
 
+function updatePresence() {
+  if (!client.user) return;
+  const { status, activityName } = getPresenceConfig(botState, { error: botStartupError });
+  const activity = { name: activityName, type: 3 };
+  client.user.setPresence({ status, activities: [activity] }).catch(() => {});
+}
+
+function setBotState(nextState) {
+  botState = nextState;
+  updatePresence();
+}
+
+function markBotError() {
+  botStartupError = true;
+  updatePresence();
+}
+
+function clearBotError() {
+  botStartupError = false;
+  updatePresence();
+}
+
 client.log = async (content) => {
   if (typeof content === 'string') {
     console.log(content);
@@ -245,6 +269,7 @@ console.error = (...args) => {
   const message = args.join(' ');
   appendLogLine(message);
   originalConsoleError.apply(console, args);
+  markBotError();
   if (logChannelId) {
     client.logEvent('Bot error', message, 0xff5555).catch(() => {});
   }
@@ -341,11 +366,26 @@ client.on('messageCreate', async (message) => {
   }
 });
 
-client.once('clientReady', async () => {
+client.once('ready', async () => {
+  clearBotError();
+  setBotState('online');
   const message = `Logged in as ${client.user.tag}`;
   console.log(message);
   await client.logEvent('Bot started', message, 0x2ecc71);
   initializeTerminalAI();
+});
+
+client.on('error', () => {
+  markBotError();
+});
+
+client.on('shardError', () => {
+  markBotError();
+});
+
+client.on('disconnect', () => {
+  markBotError();
+  setBotState('offline');
 });
 
 const handleShutdown = async (signal) => {
@@ -364,6 +404,9 @@ process.on('SIGUSR2', () => { handleShutdown('SIGUSR2'); });
 const token = process.env.DISCORD_TOKEN;
 if (!token) {
   console.warn('Missing DISCORD_TOKEN in env; serving the web console without Discord login.');
+  markBotError();
+  setBotState('offline');
 } else {
+  setBotState('starting');
   client.login(token);
 }

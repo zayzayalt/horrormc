@@ -1,3 +1,4 @@
+const fs = require('fs');
 const http = require('http');
 const { spawn } = require('child_process');
 const path = require('path');
@@ -89,7 +90,26 @@ function getBindConfig(env = process.env) {
   };
 }
 
+function ensureRuntimeDirectories(baseDir = process.cwd()) {
+  const logDir = path.join(baseDir, 'logs');
+  fs.mkdirSync(logDir, { recursive: true });
+  return logDir;
+}
+
+function getPresenceConfig(state = botState, { error = false } = {}) {
+  if (state === 'online' && !error) {
+    return { status: 'online', activityName: 'Watching HorrorMC' };
+  }
+
+  if (error) {
+    return { status: 'dnd', activityName: 'Watching HorrorMC' };
+  }
+
+  return { status: 'idle', activityName: 'Watching HorrorMC' };
+}
+
 function createHealthServer({ host, port } = getBindConfig()) {
+  ensureRuntimeDirectories(process.cwd());
   const server = http.createServer((req, res) => {
     const url = req.url || '/';
     const pathname = new URL(url, 'http://127.0.0.1').pathname;
@@ -310,4 +330,4 @@ function createHealthServer({ host, port } = getBindConfig()) {
   return server;
 }
 
-module.exports = { getBindConfig, createHealthServer, appendLogLine };
+module.exports = { getBindConfig, createHealthServer, appendLogLine, ensureRuntimeDirectories, getPresenceConfig };
